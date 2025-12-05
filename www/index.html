@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Knowledge-Based Travel Planner</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 min-h-screen flex items-center justify-center p-6">
+  <div class="w-full max-w-4xl bg-white rounded-2xl shadow-xl p-6">
+    <h1 class="text-2xl font-semibold text-slate-800 mb-4">Knowledge-Based Travel Planner</h1>
+
+    <div id="form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm text-slate-600">Budget</label>
+        <select id="budget" class="mt-1 w-full p-2 border rounded-lg">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Days available</label>
+        <input id="days" type="number" min="1" value="4" class="mt-1 w-full p-2 border rounded-lg"/>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Preferred climate</label>
+        <select id="climate" class="mt-1 w-full p-2 border rounded-lg">
+          <option value="warm">Warm</option>
+          <option value="cool" selected>Cool</option>
+          <option value="cold">Cold</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Visa status</label>
+        <select id="visa" class="mt-1 w-full p-2 border rounded-lg">
+          <option value="visa_free">Visa-free</option>
+          <option value="visa_on_arrival" selected>Visa on arrival</option>
+          <option value="has_visa">I have a visa</option>
+          <option value="has_schengen">I have Schengen</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Continent</label>
+        <select id="continent" class="mt-1 w-full p-2 border rounded-lg">
+          <option value="any" selected>Any</option>
+          <option value="asia">Asia</option>
+          <option value="europe">Europe</option>
+          <option value="africa">Africa</option>
+          <option value="north_america">North America</option>
+          <option value="south_america">South America</option>
+          <option value="oceania">Oceania</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Travel month (1-12, 0=any)</label>
+        <input id="month" type="number" min="0" max="12" value="0" class="mt-1 w-full p-2 border rounded-lg"/>
+      </div>
+
+      <div class="md:col-span-2">
+        <label class="block text-sm text-slate-600">Desired activities (optional, comma separated)</label>
+        <input id="activities" type="text" placeholder="e.g., beach, hiking" class="mt-1 w-full p-2 border rounded-lg"/>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Minimum safety level (1-5)</label>
+        <input id="safety" type="number" min="1" max="5" value="1" class="mt-1 w-full p-2 border rounded-lg"/>
+      </div>
+
+      <div>
+        <label class="block text-sm text-slate-600">Food preference</label>
+        <select id="food" class="mt-1 w-full p-2 border rounded-lg">
+          <option value="any" selected>Any</option>
+          <option value="street">Street</option>
+          <option value="vegetarian">Vegetarian</option>
+          <option value="seafood">Seafood</option>
+          <option value="halal">Halal</option>
+          <option value="local">Local</option>
+        </select>
+      </div>
+
+      <div class="md:col-span-2 flex gap-2 mt-2">
+        <button id="submitBtn" class="bg-indigo-600 text-white px-4 py-2 rounded-lg shadow hover:bg-indigo-700">Recommend</button>
+        <button id="clearBtn" class="bg-gray-100 px-4 py-2 rounded-lg">Clear</button>
+        <div id="status" class="ml-auto text-sm text-slate-500"></div>
+      </div>
+    </div>
+
+    <div id="results" class="mt-6 grid grid-cols-1 gap-4"></div>
+  </div>
+
+<script>
+const submitBtn = document.getElementById('submitBtn');
+const clearBtn = document.getElementById('clearBtn');
+const results = document.getElementById('results');
+const status = document.getElementById('status');
+
+clearBtn.addEventListener('click', () => {
+  document.getElementById('budget').value = 'medium';
+  document.getElementById('days').value = 4;
+  document.getElementById('climate').value = 'cool';
+  document.getElementById('visa').value = 'visa_on_arrival';
+  document.getElementById('activities').value = '';
+  document.getElementById('continent').value = 'any';
+  document.getElementById('month').value = 0;
+  document.getElementById('safety').value = 1;
+  document.getElementById('food').value = 'any';
+  results.innerHTML = '';
+  status.textContent = '';
+});
+
+submitBtn.addEventListener('click', async () => {
+  status.textContent = 'Finding matches...';
+  results.innerHTML = '';
+
+  const payload = {
+    budget: document.getElementById('budget').value,
+    days: parseInt(document.getElementById('days').value || '4', 10),
+    climate: document.getElementById('climate').value,
+    visa_status: document.getElementById('visa').value,
+    activities: (document.getElementById('activities').value || "").split(',').map(s => s.trim()).filter(Boolean),
+    continent: document.getElementById('continent').value,
+    month: parseInt(document.getElementById('month').value || '0', 10),
+    safety_min: parseInt(document.getElementById('safety').value || '1', 10),
+    food_pref: document.getElementById('food').value
+  };
+
+  try {
+    const res = await fetch('/recommend', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (!data.ok) {
+      status.textContent = data.message || 'No matches';
+      return;
+    }
+
+    status.textContent = `Found ${data.recommendations.length} recommendation(s)`;
+
+    // Render cards
+    for (const rec of data.recommendations) {
+      const card = document.createElement('div');
+      card.className = 'p-4 bg-white border rounded-lg shadow-sm';
+
+      const header = document.createElement('div');
+      header.className = 'flex items-baseline justify-between';
+      const title = document.createElement('h3');
+      title.className = 'text-lg font-semibold';
+      title.textContent = humanize(rec.place);
+      const score = document.createElement('div');
+      score.className = 'text-sm text-indigo-600 font-semibold';
+      score.textContent = `Score: ${rec.score}`;
+      header.appendChild(title);
+      header.appendChild(score);
+      card.appendChild(header);
+
+      const ul = document.createElement('ul');
+      ul.className = 'mt-2 list-disc list-inside text-sm text-slate-700';
+      if (Array.isArray(rec.reasons)) {
+        for (const r of rec.reasons) {
+          const li = document.createElement('li');
+          li.textContent = r;
+          ul.appendChild(li);
+        }
+      } else {
+        const li = document.createElement('li');
+        li.textContent = String(rec.reasons);
+        ul.appendChild(li);
+      }
+      card.appendChild(ul);
+
+      results.appendChild(card);
+    }
+
+  } catch (err) {
+    status.textContent = 'Error: ' + err.message;
+  }
+});
+
+function humanize(atom) {
+  return String(atom).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+</script>
+</body>
+</html>
