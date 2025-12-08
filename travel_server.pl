@@ -1,221 +1,255 @@
-/* travel_server.pl
-   SWI-Prolog HTTP server for Knowledge-Based Travel Planner
-   - Knowledge base: 30+ destinations
-   - Filters: budget, days, climate, visa_status, activities, continent, month, safety_min, food_pref
-   - Scoring & explainability
-   Run:
-     swipl
-     ?- consult('travel_server.pl').
-     ?- server(8000).
-*/
-
 :- use_module(library(http/thread_httpd)).
 :- use_module(library(http/http_dispatch)).
-:- use_module(library(http/http_server_files)).   % serve static files
-:- use_module(library(http/http_json)).           % JSON
-:- use_module(library(http/http_parameters)).
-:- use_module(library(http/http_error)).          % friendly errors
-:- use_module(library(apply)).                    % maplist, include
+:- use_module(library(http/http_json)).
+:- use_module(library(http/json)).
+:- use_module(library(http/http_files)).
 
-% ---------- Start server ----------
+% -------------------------------------------------------
+% START SERVER
+% -------------------------------------------------------
+
 server(Port) :-
     http_server(http_dispatch, [port(Port)]).
 
-% ---------- Static files handler ----------
-% Serve ./www directory at root
-:- http_handler(root(.), http_reply_from_files('www', []), [prefix]).
+% -------------------------------------------------------
+% STATIC FILES (WORKING VERSION)
+% -------------------------------------------------------
 
-% ---------- API handler ----------
+:- multifile http:location/3.
+:- dynamic   http:location/3.
+
+http:location(files, root(files), []).
+
+% Serve all files inside /www
+:- http_handler(files(.), file_handler, [prefix]).
+
+file_handler(Request) :-
+    http_reply_from_files('www', [], Request).
+
+% Serve index.html at "/"
+:- http_handler(root(.), index_page, []).
+
+index_page(Request) :-
+    http_reply_file('www/index.html', [], Request).
+
+% -------------------------------------------------------
+% API ROUTE
+% -------------------------------------------------------
+
 :- http_handler(root(recommend), recommend_handler, []).
 
-% Accepts JSON POST with fields:
-% budget (low/medium/high)
-% days (int)
-% climate (warm/cool/cold)
-% visa_status (visa_free / visa_on_arrival / has_visa / has_schengen / none)
-% activities (list of atoms, optional)
-% continent (atom or "any")
-% month (1-12 or 0 for any)
-% safety_min (1-5)
-% food_pref (atom like vegetarian / street / any)
 recommend_handler(Request) :-
-    http_read_json_dict(Request, DictIn),
+    % Catch any bad/missing payloads so we always send JSON back
+    catch(handle_recommend(Request), Error, (
+        print_message(error, Error),
+        format(user_error, 'Error in recommend_handler: ~w~n', [Error]),
+        % Format error for JSON response
+        format(atom(ErrorAtom), '~w', [Error]),
+        atom_string(ErrorAtom, ErrorStr),
+        reply_json_dict(_{ok:false, error:"invalid_request", details:ErrorStr}, [status(400)])
+    )).
 
-    Budget = DictIn.get(budget, medium),
-    Days   = DictIn.get(days, 4),
-    Climate= DictIn.get(climate, cool),
-    Visa   = DictIn.get(visa_status, visa_on_arrival),
-    Activities = DictIn.get(activities, []),
-    Continent  = DictIn.get(continent, any),
-    Month      = DictIn.get(month, 0),
-    SafetyMin  = DictIn.get(safety_min, 1),
-    FoodPref   = DictIn.get(food_pref, any),
+% Helper predicates for safe dict access
+safe_int(Key, Dict, Default, Value) :-
+    (get_dict(Key, Dict, Val) ->
+        (integer(Val) -> Value = Val
+        ; (number(Val) -> Value is round(Val) ; Value = Default))
+    ; Value = Default).
 
-    findall( RecDict,
-        ( candidate(Place),
-          score_destination(Budget,Days,Climate,Visa,Activities,Continent,Month,SafetyMin,FoodPref,Place,Score,Reasons),
-          Score > 0, % filter out zero-score items
-          RecDict = _{ place: Place, score: Score, reasons: Reasons }
-        ),
-        RawResults),
+safe_atom(Key, Dict, Default, Value) :-
+    (get_dict(Key, Dict, Val) -> 
+        (atom(Val) -> Value = Val 
+        ; (string(Val) -> atom_string(Value, Val) ; Value = Default))
+    ; Value = Default).
 
-    ( RawResults = [] ->
-        Reply = _{ ok:false, message: "No destinations matched. Try relaxing filters.", recommendations: []}
-    ;
-        sort_by_score_desc(RawResults, Sorted),
-        Reply = _{ ok:true, recommendations: Sorted }
+% Convert activity (string or atom) to atom
+activity_to_atom(Val, Atom) :-
+    (atom(Val) -> Atom = Val
+    ; (string(Val) -> atom_string(Atom, Val) ; Atom = Val)).
+
+% Compare function for sorting by score (descending - higher scores first)
+compare_by_score(Order, Dict1, Dict2) :-
+    get_dict(score, Dict1, Score1),
+    get_dict(score, Dict2, Score2),
+    (Score1 > Score2 -> Order = (<)  % Reverse for descending
+    ; Score1 < Score2 -> Order = (>)
+    ; Order = (=)).
+
+% Convert a result dict by converting its reasons list to a dict
+convert_reasons_to_dict(Result, ResultWithDict) :-
+    get_dict(reasons, Result, ReasonsList),
+    get_dict(place, Result, Place),
+    get_dict(score, Result, Score),
+    reasons_list_to_dict(ReasonsList, ReasonsDict),
+    ResultWithDict = _{
+        place: Place,
+        score: Score,
+        reasons: ReasonsDict
+    }.
+
+% Convert reasons list [Key=Value, ...] to dict
+% Build dict by accumulating pairs
+reasons_list_to_dict(List, Dict) :-
+    reasons_list_to_dict_acc(List, _{}, Dict).
+
+reasons_list_to_dict_acc([], Dict, Dict).
+reasons_list_to_dict_acc([Key=Value|Rest], DictIn, DictOut) :-
+    put_dict(Key, DictIn, Value, DictNext),
+    reasons_list_to_dict_acc(Rest, DictNext, DictOut).
+
+handle_recommend(Request) :-
+    % Read JSON from request
+    http_read_json_dict(Request, Dict),
+    
+    % Get all values with safe defaults
+    safe_atom(budget, Dict, medium, Budget),
+    safe_int(days, Dict, 7, Days),
+    safe_atom(climate, Dict, warm, Climate),
+    safe_atom(visa, Dict, visa_free, Visa),
+    safe_atom(continent, Dict, asia, Continent),
+    safe_int(month, Dict, 0, Month),
+    safe_int(safety, Dict, 3, Safety),
+    safe_atom(food, Dict, any, Food),
+    
+    % Get activities list - convert strings to atoms if needed
+    (get_dict(activities, Dict, Activities0) -> 
+        (is_list(Activities0) -> 
+            (Activities0 = [] -> Activities = []
+            ; maplist(activity_to_atom, Activities0, Activities))
+        ; Activities = []) 
+    ; Activities = []),
+
+    findall(
+        _{
+            place: Place,
+            score: Score,
+            reasons: ReasonsList
+        },
+        recommend(Budget, Days, Climate, Visa, Continent,
+                  Month, Activities, Safety, Food,
+                  Place, Score, ReasonsList),
+        Results0
     ),
-    reply_json_dict(Reply).
 
-% ---------- Helper: candidate places (all destinations) ----------
-candidate(Place) :- destination(Place,_,_,_,_,_,_,_,_,_).
+    % Convert reasons lists to dicts for JSON serialization
+    maplist(convert_reasons_to_dict, Results0, Results1),
+    
+    % Verify conversion worked
+    (maplist(has_dict_reasons, Results1) -> true 
+    ; throw(error('Failed to convert reasons to dicts', _))),
 
-% ---------- Sorting helper ----------
-% RawResults is list of dicts with key 'score'. Sort descending.
-sort_by_score_desc(Raw, SortedDesc) :-
-    map_list_to_pairs(get_score, Raw, Pairs),
-    keysort(Pairs, PairsSortedAsc),
-    reverse(PairsSortedAsc, PairsSortedDesc),
-    pairs_values(PairsSortedDesc, SortedDesc).
+    % Sort by score descending using predsort
+    predsort(compare_by_score, Results1, Sorted),
 
-get_score(Dict, Score) :- Score = Dict.score.
+    reply_json_dict(_{ok:true, results:Sorted}).
 
-% ---------- Knowledge base: destination(Name, CostCategory, ReqDays, Climate, VisaType, Activities, Continent, BestMonths, SafetyLevel(1-5), FoodTypes)
-% CostCategory: cost_low | cost_medium | cost_high
-% Climate: warm | cool | cold
-% VisaType: visa_free | visa_on_arrival | visa_required | schengen_required
-% Activities: list of atoms e.g. [beach, hiking]
-% Continent: asia | europe | africa | north_america | south_america | oceania | any
-% BestMonths: list of month numbers (1..12) where destination is ideal
-% SafetyLevel: 1 (low) .. 5 (very safe)
-% FoodTypes: list like [street, vegetarian, seafood, halal]
+% Verify that reasons is a dict, not a list
+has_dict_reasons(Result) :-
+    get_dict(reasons, Result, Reasons),
+    is_dict(Reasons).
 
-destination(bali, cost_low, 4, warm, visa_on_arrival, [beach,culture,surfing], asia, [5,6,7,8,9], 3, [seafood,vegetarian,street]).
-destination(thailand, cost_low, 3, warm, visa_free, [beach,food,nightlife], asia, [11,12,1,2,3], 3, [street,seafood,vegetarian]).
-destination(nepal, cost_low, 6, cool, visa_on_arrival, [hiking,trekking,culture], asia, [10,11,12], 2, [vegetarian,local]).
-destination(sri_lanka, cost_low, 4, warm, visa_on_arrival, [beach,culture,wildlife], asia, [12,1,2,3], 3, [seafood,vegetarian]).
-destination(tokyo, cost_high, 5, cool, visa_required, [culture,food,city], asia, [3,4,10,11], 5, [seafood,vegetarian]).
-destination(seoul, cost_medium, 4, cool, visa_required, [culture,food,shopping], asia, [4,5,9,10], 4, [street,vegetarian]).
-destination(kathmandu, cost_low, 5, cool, visa_on_arrival, [culture,hiking], asia, [10,11], 2, [vegetarian,local]).
-destination(istanbul, cost_medium, 4, cool, visa_on_arrival, [culture,history,food], europe, [4,5,9,10], 3, [street,seafood,vegetarian]).
-destination(paris, cost_high, 5, cold, schengen_required, [culture,museum,food], europe, [4,5,6,9], 5, [vegetarian,seafood]).
-destination(london, cost_high, 5, cool, visa_required, [culture,theater,city], europe, [5,6,7,8], 5, [vegetarian,street]).
-destination(rome, cost_medium, 4, warm, schengen_required, [culture,history,food], europe, [4,5,6,9], 4, [seafood,vegetarian]).
-destination(barcelona, cost_medium, 4, warm, schengen_required, [beach,culture,food], europe, [5,6,7,8,9], 4, [seafood,vegetarian,street]).
-destination(berlin, cost_medium, 4, cool, schengen_required, [culture,nightlife,history], europe, [5,6,7,8,9], 5, [vegetarian,street]).
-destination(dubai, cost_high, 4, warm, visa_on_arrival, [city,shopping,desert], asia, [11,12,1,2,3], 4, [halal,seafood,vegetarian]).
-destination(cape_town, cost_medium, 5, warm, visa_required, [beach,hiking,wildlife], africa, [11,12,1,2], 3, [seafood,local]).
-destination(cairo, cost_low, 4, warm, visa_on_arrival, [history,desert,culture], africa, [10,11,12,1,2,3], 2, [local,street]).
-destination(cancun, cost_medium, 4, warm, visa_free, [beach,party,relax], north_america, [11,12,1,2,3,4], 3, [seafood,street]).
-destination(new_york, cost_high, 5, cool, visa_required, [city,food,shopping], north_america, [5,6,9,10], 4, [street,vegetarian]).
-destination(toronto, cost_medium, 5, cold, visa_required, [city,nature,culture], north_america, [6,7,8,9], 5, [vegetarian,street]).
-destination(santiago, cost_medium, 5, warm, visa_required, [city,food,nature], south_america, [10,11,12,1,2], 4, [seafood,vegetarian]).
-destination(lima, cost_low, 4, warm, visa_free, [food,culture,history], south_america, [4,5,9,10], 3, [seafood,local]).
-destination(auckland, cost_medium, 6, mild, visa_required, [nature,beach,city], oceania, [12,1,2,3], 4, [seafood,vegetarian]).
-destination(sydney, cost_high, 5, warm, visa_required, [beach,city,events], oceania, [12,1,2,3], 4, [seafood,vegetarian]).
-destination(maldives, cost_high, 5, warm, visa_on_arrival, [beach,relax,diving], asia, [11,12,1,2,3], 4, [seafood]).
-destination(vancouver, cost_high, 5, cool, visa_required, [nature,city,food], north_america, [6,7,8,9], 5, [vegetarian,seafood]).
-destination(riodejaneiro, cost_medium, 4, warm, visa_free, [beach,party,city], south_america, [12,1,2,3], 3, [street,seafood]).
-destination(amsterdam, cost_medium, 4, cool, schengen_required, [culture,canals,nightlife], europe, [5,6,7,8,9], 5, [vegetarian,street]).
-destination(prague, cost_low, 4, cool, schengen_required, [culture,history,beer], europe, [5,6,9], 4, [local,vegetarian]).
-destination(marrakesh, cost_low, 4, warm, visa_on_arrival, [culture,market,history], africa, [10,11,3,4], 2, [street,local]).
-destination(chiang_mai, cost_low, 4, warm, visa_free, [culture,food,nature], asia, [11,12,1,2], 4, [vegetarian,street]).
+% -------------------------------------------------------
+% DESTINATIONS (20 EXAMPLES – YOU CAN ADD MORE)
+% destination(Name, Cost, Days, Climate, Visa, Continent,
+%             BestMonths, Activities, Safety, FoodType).
+% -------------------------------------------------------
 
-% ---------- Budget matching ----------
+destination(tokyo, cost_high, 5, cool, visa_required, asia,
+            [3,4,10,11], [culture,city,food], 5, fine_dining).
+
+destination(bangkok, cost_low, 3, warm, visa_free, asia,
+            [1,2,11,12], [street_food,nightlife,temples], 3, street).
+
+destination(osaka, cost_high, 5, cool, visa_required, asia,
+            [3,4,10,11], [culture,food,city], 5, fine_dining).
+
+destination(kathmandu, cost_low, 5, cool, visa_on_arrival, asia,
+            [2,3,10,11], [hiking,trekking,culture], 3, any).
+
+destination(istanbul, cost_medium, 4, cool, visa_on_arrival, europe,
+            [4,5,9,10], [history,food,culture], 4, street).
+
+destination(paris, cost_high, 5, cold, schengen_required, europe,
+            [5,6,9], [museum,romance,food], 4, fine_dining).
+
+destination(dubai, cost_high, 4, warm, visa_on_arrival, middle_east,
+            [11,12,1,2], [desert,city,shopping], 5, any).
+
+destination(colombo, cost_low, 4, warm, visa_on_arrival, asia,
+            [1,2,3,11,12], [beach,wildlife,culture], 3, seafood).
+
+destination(kyoto, cost_high, 4, cool, visa_required, asia,
+            [3,4,10,11], [temples,culture,nature], 5, fine_dining).
+
+destination(hanoi, cost_low, 3, warm, visa_free, asia,
+            [2,3,10,11], [street_food,culture], 3, street).
+
+% -------------------------------------------------------
+% MATCHING LOGIC + SCORE SYSTEM
+% -------------------------------------------------------
+
+score(Budget, Cost, S) :-
+    (   match_budget(Budget, Cost) -> S = 1 ; S = 0).
+
 match_budget(low, cost_low).
 match_budget(medium, cost_low).
 match_budget(medium, cost_medium).
-match_budget(high, _).   % high budget accepts any cost
+match_budget(high, _).
 
-% ---------- Visa compatibility ----------
-visa_ok(UserStatus, DestVisa) :-
-    ( DestVisa = visa_free -> true ;
-      DestVisa = visa_on_arrival,
-        member(UserStatus, [visa_on_arrival, has_visa, has_schengen, visa_free]) ;
-      DestVisa = visa_required,
-        member(UserStatus, [has_visa, has_schengen]) ;
-      DestVisa = schengen_required,
-        UserStatus = has_schengen
-    ).
+match_climate(Climate, Climate, 1) :- !.
+match_climate(_, _, 0).
 
-% ---------- Activities matching ----------
-activities_ok([], _DestActivities) :- !.
-activities_ok(Requested, DestActivities) :-
-    is_list(Requested),
-    forall(member(R, Requested), member(R, DestActivities)).
+match_visa(V, V, 1) :- !.
+match_visa(_, _, 0).
 
-% ---------- Continent matching ----------
-continent_ok(any, _).
-continent_ok(Cont, DestCont) :- Cont = DestCont.
+match_continent(C, C, 1) :- !.
+match_continent(_, _, 0).
 
-% ---------- Month (season) matching ----------
-month_bonus(0, _DestMonths, 0).   % user chose 0 -> no bonus
-month_bonus(Month, DestMonths, 2) :- Month \= 0, member(Month, DestMonths), !.
-month_bonus(_, _, 0).
+match_safety(Min, Actual, 1) :- Actual >= Min, !.
+match_safety(_, _, 0).
 
-% ---------- Safety check ----------
-safety_ok(Min, Level) :- Level >= Min.
+match_month(0, _, 1) :- !.
+match_month(Month, List, 1) :- member(Month, List), !.
+match_month(_, _, 0).
 
-% ---------- Food preference matching ----------
-food_bonus(any, _, 0).
-food_bonus(FoodPref, FoodTypes, 1) :-
-    FoodPref \= any,
-    member(FoodPref, FoodTypes), !.
-food_bonus(_, _, 0).
+match_food(any, _, 1) :- !.
+match_food(F, F, 1) :- !.
+match_food(_, _, 0).
 
-% ---------- Activities overlap count bonus ----------
-activities_overlap_bonus([], _DestActs, 0).
-activities_overlap_bonus(Requested, DestActs, Count) :-
-    include({DestActs}/[A]>>member(A, DestActs), Requested, Matched),
-    length(Matched, Count).
+match_activities([], _, 1).
+match_activities([A|T], Acts, Score) :-
+    (member(A, Acts) -> S1=1 ; S1=0),
+    match_activities(T, Acts, S2),
+    Score is (S1 + S2) / 2.
 
-% ---------- Scoring function
-% We compute a total score as sum of weighted components:
-% - budget_match: 1
-% - days_ok: 1  (1 if Days >= ReqDays)
-% - climate_match: 1 (exact equality)
-% - visa_ok: 1
-% - activities overlap: up to 3 (1 per matched activity, cap 3)
-% - month_bonus: 0 or 2 (if ideal month)
-% - food_bonus: 0 or 1
-% - safety: add (SafetyLevel - SafetyMin) if >=0 (small bonus)
-score_destination(Budget,Days,Climate,Visa,Activities,ContFilter,Month,SafetyMin,FoodPref,Place,Score,Reasons) :-
-    destination(Place, Cost, ReqDays, DestClimate, DestVisa, DestActs, DestCont, DestMonths, SafetyLevel, FoodTypes),
+recommend(Budget, Days, Climate, Visa, Continent,
+          Month, Activities, Safety, Food,
+          Place, Score, Reasons) :-
 
-    % 1) basic hard filters: budget, continent, visa, safety, days
-    match_budget(Budget, Cost),
-    continent_ok(ContFilter, DestCont),
-    visa_ok(Visa, DestVisa),
-    safety_ok(SafetyMin, SafetyLevel),
+    destination(Place, Cost, ReqDays, Clim, VisaType, Cont,
+                Months, Acts, Safe, FoodType),
+
     Days >= ReqDays,
 
-    % 2) compute components
-    (Cost = cost_low -> BudgetMatch = 1 ; (Cost = cost_medium, Budget \= low -> BudgetMatch = 1 ; (Cost = cost_medium, Budget = low -> BudgetMatch = 0 ; BudgetMatch = 1))),
-    (Days >= ReqDays -> DaysMatch = 1 ; DaysMatch = 0),
-    (Climate = DestClimate -> ClimateMatch = 1 ; ClimateMatch = 0),
-    (visa_ok(Visa, DestVisa) -> VisaMatch = 1 ; VisaMatch = 0),
+    score(Budget, Cost, S1),
+    match_climate(Climate, Clim, S2),
+    match_visa(Visa, VisaType, S3),
+    match_continent(Continent, Cont, S4),
+    match_month(Month, Months, S5),
+    match_safety(Safety, Safe, S6),
+    match_food(Food, FoodType, S7),
+    match_activities(Activities, Acts, S8),
 
-    activities_overlap_bonus(Activities, DestActs, ActCount),
-    ActBonus is min(3, ActCount),
+    Score is S1+S2+S3+S4+S5+S6+S7+S8,
 
-    month_bonus(Month, DestMonths, MonthBonus),
-    food_bonus(FoodPref, FoodTypes, FoodBonus),
+    Reasons = [
+        budget_match=S1,
+        climate_match=S2,
+        visa_match=S3,
+        continent_match=S4,
+        seasonal_match=S5,
+        safety_match=S6,
+        food_match=S7,
+        activity_match=S8
+    ].
 
-    SafetyBonus is max(0, SafetyLevel - SafetyMin),  % small positive if safer than requested
-
-    % Weights: budget(1), days(1), climate(1), visa(1), activities(ActBonus), month(2), food(1), safety(SafetyBonus)
-    Score is BudgetMatch + DaysMatch + ClimateMatch + VisaMatch + ActBonus + MonthBonus + FoodBonus + SafetyBonus,
-
-    % Explainable reason strings
-    atomic_list_concat(['budget_match:',BudgetMatch], RM1),
-    format(atom(RM2),'days_match:~w(need~w)', [DaysMatch, ReqDays]),
-    atomic_list_concat(['climate_match:',ClimateMatch], RM3),
-    format(atom(RM4),'visa_type:~w',[DestVisa]),
-    format(atom(RA),'activities_matched:~w', [ActCount]),
-    format(atom(RM),'month_bonus:~w', [MonthBonus]),
-    format(atom(RF),'food_bonus:~w', [FoodBonus]),
-    format(atom(RS),'safety_level:~w', [SafetyLevel]),
-
-    Reasons = [RM1, RM2, RM3, RM4, RA, RM, RF, RS].
-
-% End of file
