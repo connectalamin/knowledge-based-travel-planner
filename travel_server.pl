@@ -3,6 +3,7 @@
 :- use_module(library(http/http_json)).
 :- use_module(library(http/json)).
 :- use_module(library(http/http_files)).
+:- use_module(library(lists)).
 
 % -------------------------------------------------------
 % START SERVER
@@ -37,6 +38,13 @@ index_page(Request) :-
 % -------------------------------------------------------
 
 :- http_handler(root(recommend), recommend_handler, []).
+:- http_handler(root(activities), activities_handler, []).
+
+activities_handler(_Request) :-
+    findall(List, destination(_,_,_,_,_,_,_,List,_,_), Lists),
+    flatten(Lists, Flat),
+    sort(Flat, Unique),
+    reply_json_dict(_{ok:true, activities:Unique}).
 
 recommend_handler(Request) :-
     % Catch any bad/missing payloads so we always send JSON back
@@ -184,6 +192,36 @@ destination(kyoto, cost_high, 4, cool, visa_required, asia,
 destination(hanoi, cost_low, 3, warm, visa_free, asia,
             [2,3,10,11], [street_food,culture], 3, street).
 
+destination(london, cost_high, 4, cool, visa_required, europe,
+            [5,6,7,8,9], [history,culture,museum,shopping], 5, fine_dining).
+
+destination(new_york, cost_high, 5, cool, visa_required, north_america,
+            [4,5,6,9,10], [city,shopping,museum,food], 4, fine_dining).
+
+destination(sydney, cost_high, 5, warm, visa_required, oceania,
+            [12,1,2,3], [beach,city,nature], 5, any).
+
+destination(rome, cost_medium, 4, warm, schengen_required, europe,
+            [4,5,6,9,10], [history,culture,food,romance], 4, fine_dining).
+
+destination(cairo, cost_low, 4, warm, visa_on_arrival, africa,
+            [10,11,12,1,2], [history,desert,culture], 3, street).
+
+destination(cape_town, cost_medium, 5, warm, visa_required, africa,
+            [11,12,1,2,3], [nature,beach,hiking,wine], 4, fine_dining).
+
+destination(rio, cost_medium, 5, warm, visa_required, south_america,
+            [12,1,2,3], [beach,party,nature], 3, street).
+
+destination(bali, cost_low, 5, warm, visa_free, asia,
+            [4,5,6,7,8,9], [beach,nature,culture,wellness], 4, any).
+
+destination(amsterdam, cost_high, 3, cool, schengen_required, europe,
+            [4,5,6,7,8,9], [city,museum,culture,nightlife], 5, any).
+
+destination(barcelona, cost_medium, 4, warm, schengen_required, europe,
+            [5,6,7,8,9], [architecture,beach,food,nightlife], 4, fine_dining).
+
 % -------------------------------------------------------
 % MATCHING LOGIC + SCORE SYSTEM
 % -------------------------------------------------------
@@ -210,17 +248,23 @@ match_safety(_, _, 0).
 
 match_month(0, _, 1) :- !.
 match_month(Month, List, 1) :- member(Month, List), !.
+match_month(Month, List, 0.5) :-
+    (Month =:= 1 -> Prev = 12 ; Prev is Month - 1),
+    (Month =:= 12 -> Next = 1 ; Next is Month + 1),
+    (member(Prev, List) ; member(Next, List)), !.
 match_month(_, _, 0).
 
 match_food(any, _, 1) :- !.
 match_food(F, F, 1) :- !.
 match_food(_, _, 0).
 
-match_activities([], _, 1).
-match_activities([A|T], Acts, Score) :-
-    (member(A, Acts) -> S1=1 ; S1=0),
-    match_activities(T, Acts, S2),
-    Score is (S1 + S2) / 2.
+match_activities([], _, 1) :- !.
+match_activities(Requested, Available, Score) :-
+    Requested \= [],
+    intersection(Requested, Available, Matched),
+    length(Requested, Total),
+    length(Matched, Count),
+    Score is Count / Total.
 
 recommend(Budget, Days, Climate, Visa, Continent,
           Month, Activities, Safety, Food,

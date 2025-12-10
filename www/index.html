@@ -52,6 +52,10 @@
                         <option value="asia" selected>Asia</option>
                         <option value="europe">Europe</option>
                         <option value="middle_east">Middle East</option>
+                        <option value="africa">Africa</option>
+                        <option value="north_america">North America</option>
+                        <option value="south_america">South America</option>
+                        <option value="oceania">Oceania</option>
                     </select>
                 </div>
             </div>
@@ -119,9 +123,10 @@
             <!-- Activities -->
             <div class="form-group">
                 <label for="activities">Interests (Keywords)</label>
-                <div class="input-wrapper">
+                <div class="input-wrapper" style="position: relative;">
                     <i class="fa-solid fa-hashtag"></i>
-                    <input id="activities" type="text" placeholder="beach, hiking, history..." value="beach,hiking">
+                    <input id="activities" type="text" placeholder="Type to search (e.g. beach, hiking)..." value="beach,hiking" autocomplete="off">
+                    <div id="suggestions" class="suggestions-dropdown"></div>
                 </div>
             </div>
 
@@ -139,9 +144,14 @@
                 </div>
             </div>
 
-            <button id="recommendBtn" class="btn-primary" onclick="findDestinations()">
-                <i class="fa-solid fa-sparkles"></i> Generate Plan
-            </button>
+            <div style="display: flex; gap: 10px;">
+                <button id="recommendBtn" class="btn-primary" onclick="findDestinations()" style="flex: 2;">
+                    <i class="fa-solid fa-sparkles"></i> Generate Plan
+                </button>
+                <button class="btn-primary" onclick="resetForm()" style="flex: 1; background-color: var(--secondary);">
+                    <i class="fa-solid fa-rotate-right"></i>
+                </button>
+            </div>
         </div>
     </aside>
 
