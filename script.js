@@ -318,9 +318,6 @@ function renderResults(results, inputs) {
                             ${getBudgetDisplay(budgetLevel)}
                             <span>Est. Cost</span>
                         </div>
-                        <button class="btn-primary" style="width: auto; padding: 8px 16px; font-size: 0.85rem; margin-top:0;" onclick="alert('Full itinerary feature coming soon!')">
-                            View Plan
-                        </button>
                     </div>
                 </div>
             </div>
