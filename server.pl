@@ -86,7 +86,7 @@ api_info_page(_Request) :-
 
 activities_handler(_Request) :-
     cors_headers,
-    findall(List, destination(_,_,_,_,_,_,_,List,_,_), Lists),
+    findall(List, destination(_,_,_,_,_,_,_,List,_,_,_,_,_), Lists),
     flatten(Lists, Flat),
     sort(Flat, Unique),
     reply_json_dict(_{ok:true, activities:Unique}).
@@ -132,11 +132,29 @@ convert_reasons_to_dict(Result, ResultWithDict) :-
     get_dict(reasons, Result, ReasonsList),
     get_dict(place, Result, Place),
     get_dict(score, Result, Score),
+    get_dict(lat, Result, Lat),
+    get_dict(lng, Result, Lng),
+    get_dict(country, Result, Country),
+    get_dict(best_months, Result, BestMonths),
+    get_dict(activities, Result, Activities),
+    get_dict(visa, Result, Visa),
+    get_dict(food, Result, Food),
+    get_dict(cost, Result, Cost),
+    get_dict(safety, Result, Safety),
     reasons_list_to_dict(ReasonsList, ReasonsDict),
     ResultWithDict = _{
         place: Place,
         score: Score,
-        reasons: ReasonsDict
+        reasons: ReasonsDict,
+        lat: Lat,
+        lng: Lng,
+        country: Country,
+        best_months: BestMonths,
+        activities: Activities,
+        visa: Visa,
+        food: Food,
+        cost: Cost,
+        safety: Safety
     }.
 
 reasons_list_to_dict(List, Dict) :-
@@ -178,11 +196,20 @@ handle_recommend(Request) :-
         _{
             place: Place,
             score: Score,
-            reasons: ReasonsList
+            reasons: ReasonsList,
+            lat: Lat,
+            lng: Lng,
+            country: Country,
+            best_months: BestMonths,
+            activities: AllActivities,
+            visa: VisaType,
+            food: FoodType,
+            cost: Cost,
+            safety: SafetyRating
         },
         recommend(Budget, Days, Climate, Visa, Continent,
                   Month, Activities, Safety, Food,
-                  Place, Score, ReasonsList),
+                  Place, Score, ReasonsList, Lat, Lng, Country, BestMonths, AllActivities, VisaType, FoodType, Cost, SafetyRating),
         Results0
     ),
 

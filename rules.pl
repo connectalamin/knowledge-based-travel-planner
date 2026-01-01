@@ -50,15 +50,16 @@ match_activities(Requested, Available, Score) :-
     Score is Count / Total.
 
 % -------------------------------------------------------
-% MAIN RECOMMENDATION PREDICATE
+% MAIN RECOMMENDATION PREDICATE (Extended with geo data)
 % -------------------------------------------------------
 
 recommend(Budget, Days, Climate, Visa, Continent,
           Month, Activities, Safety, Food,
-          Place, Score, Reasons) :-
+          Place, Score, Reasons, Lat, Lng, Country, BestMonths, AllActivities, VisaType, FoodType, Cost, SafetyRating) :-
 
     destination(Place, Cost, ReqDays, Clim, VisaType, Cont,
-                Months, Acts, Safe, FoodType),
+                BestMonths, AllActivities, SafetyRating, FoodType,
+                Lat, Lng, Country),
 
     Days >= ReqDays,
 
@@ -66,10 +67,10 @@ recommend(Budget, Days, Climate, Visa, Continent,
     match_climate(Climate, Clim, S2),
     match_visa(Visa, VisaType, S3),
     match_continent(Continent, Cont, S4),
-    match_month(Month, Months, S5),
-    match_safety(Safety, Safe, S6),
+    match_month(Month, BestMonths, S5),
+    match_safety(Safety, SafetyRating, S6),
     match_food(Food, FoodType, S7),
-    match_activities(Activities, Acts, S8),
+    match_activities(Activities, AllActivities, S8),
 
     Score is S1+S2+S3+S4+S5+S6+S7+S8,
 
